@@ -1,4 +1,6 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { onAuthStateChanged } from "firebase/auth";
+import { auth } from "../firebase";
 
 function Home() {
   const [filters, setFilters] = useState({
@@ -8,6 +10,16 @@ function Home() {
     area: "",
     budget: "",
   });
+
+  const [user, setUser] = useState(null);
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser);
+    });
+
+    return () => unsubscribe();
+  }, []);
 
   function changeFilter(event) {
     setFilters({
@@ -38,7 +50,21 @@ function Home() {
           <a href="#contact">Contact</a>
         </div>
 
-        <button className="login-btn">Login</button>
+        {user ? (
+  <button
+    className="login-btn"
+    onClick={() => (window.location.href = "/account")}
+  >
+    Account
+  </button>
+        ) : (
+          <button
+            className="login-btn"
+            onClick={() => (window.location.href = "/login")}
+          >
+            Login
+          </button>
+        )}
       </nav>
 
       <section className="hero" id="home">
