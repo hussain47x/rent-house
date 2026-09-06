@@ -1,14 +1,20 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { collection, addDoc } from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";
+import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
 import { useNavigate } from "react-router-dom";
-import { auth, db } from "../firebase";
+import { auth, db, storage } from "../firebase";
 
 function PostProperty() {
   const navigate = useNavigate();
   const [user, setUser] = useState(undefined);
   const [submitted, setSubmitted] = useState(false);
   const [language, setLanguage] = useState("en");
+  const [imageFile, setImageFile] = useState(null);
+  const [imagePreview, setImagePreview] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const previewUrlRef = useRef("");
+  const fileInputRef = useRef(null);
 
   const [form, setForm] = useState({
     location: "",
@@ -18,10 +24,16 @@ function PostProperty() {
     area: "",
     phone: "",
     description: "",
-    imageUrl: "",
   });
 
   useEffect(() => onAuthStateChanged(auth, setUser), []);
+
+  useEffect(
+    () => () => {
+      if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
+    },
+    []
+  );
 
   const text =
     language === "ur"
@@ -40,6 +52,11 @@ function PostProperty() {
           phone: "WhatsApp نمبر",
           description: "پراپرٹی کی تفصیل",
           optional: "اختیاری",
+          addPicture: "تصویر شامل کریں",
+          changePicture: "تصویر تبدیل کریں",
+          removePicture: "تصویر ہٹائیں",
+          pictureHelp: "گیلری سے تصویر منتخب کریں یا کاپی کی ہوئی تصویر پیسٹ کریں۔",
+          uploading: "تصویر اپ لوڈ ہو رہی ہے...",
           listingFee: "لسٹنگ فیس",
           feeText: "آپ کی پراپرٹی کے رقبے کے مطابق فیس",
           submitPay: "جمع کریں اور ادائیگی کریں",
@@ -61,6 +78,11 @@ function PostProperty() {
           phone: "WhatsApp Number",
           description: "Property Description",
           optional: "Optional",
+          addPicture: "Add Picture",
+          changePicture: "Change Picture",
+          removePicture: "Remove Picture",
+          pictureHelp: "Choose a photo from your device or paste a copied image.",
+          uploading: "Uploading image...",
           listingFee: "Listing Fee",
           feeText: "Fee based on your property area",
           submitPay: "Submit & Pay",
@@ -73,6 +95,44 @@ function PostProperty() {
       ...form,
       [event.target.name]: event.target.value,
     });
+  }
+
+  function setSelectedImage(file) {
+    if (!file) return;
+
+    if (!file.type.startsWith("image/")) {
+      alert("Please choose an image file.");
+      return;
+    }
+
+    if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
+    const previewUrl = URL.createObjectURL(file);
+    previewUrlRef.current = previewUrl;
+    setImageFile(file);
+    setImagePreview(previewUrl);
+  }
+
+  function handleImageChange(event) {
+    setSelectedImage(event.target.files?.[0]);
+  }
+
+  function handlePaste(event) {
+    const pastedImage = Array.from(event.clipboardData?.files || []).find(
+      (file) => file.type.startsWith("image/")
+    );
+
+    if (pastedImage) {
+      event.preventDefault();
+      setSelectedImage(pastedImage);
+    }
+  }
+
+  function removeImage() {
+    if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
+    previewUrlRef.current = "";
+    setImageFile(null);
+    setImagePreview("");
+    if (fileInputRef.current) fileInputRef.current.value = "";
   }
 
   function calculateListingFee(areaText) {
@@ -100,6 +160,19 @@ function PostProperty() {
     const listingFee = calculateListingFee(form.area);
 
     try {
+      setIsSubmitting(true);
+      let imageUrl = "";
+
+      if (imageFile) {
+        const safeFileName = imageFile.name.replace(/[^a-zA-Z0-9._-]/g, "-");
+        const imageRef = ref(
+          storage,
+          `property-images/${user.uid}/${Date.now()}-${safeFileName}`
+        );
+        const uploadResult = await uploadBytes(imageRef, imageFile);
+        imageUrl = await getDownloadURL(uploadResult.ref);
+      }
+
       await addDoc(collection(db, "properties"), {
         location: form.location,
         type: form.type,
@@ -111,7 +184,7 @@ function PostProperty() {
           form.description || "No additional description provided.",
         listingFee: listingFee,
         paymentStatus: "pending",
-        imageUrl: form.imageUrl.trim(),
+        imageUrl,
         ownerId: user.uid,
         ownerName: user.displayName || "RentHouse member",
         ownerEmail: user.email,
@@ -122,6 +195,8 @@ function PostProperty() {
     } catch (error) {
       console.error("Error adding property:", error);
       alert(error.message);
+    } finally {
+      setIsSubmitting(false);
     }
   }
 
@@ -145,6 +220,17 @@ function PostProperty() {
     fontSize: "15px",
     fontWeight: "700",
     color: "#263449",
+  };
+
+  const imageButtonStyle = {
+    display: "inline-block",
+    boxSizing: "border-box",
+    padding: "11px 16px",
+    border: "none",
+    borderRadius: "10px",
+    fontSize: "14px",
+    fontWeight: "700",
+    cursor: "pointer",
   };
 
   return (
@@ -259,6 +345,7 @@ function PostProperty() {
         ) : (
           <form
             onSubmit={submitProperty}
+            onPaste={handlePaste}
             style={{
               background: "#ffffff",
               borderRadius: "24px",
@@ -348,16 +435,53 @@ function PostProperty() {
             </div>
 
             <div style={{ marginTop: "25px" }}>
-              <label style={labelStyle}>Property Image URL ({text.optional})</label>
+              <label style={labelStyle} htmlFor="property-image">
+                {text.addPicture} ({text.optional})
+              </label>
+
+              {imagePreview ? (
+                <div style={{ marginTop: "12px" }}>
+                  <img
+                    src={imagePreview}
+                    alt="Selected property preview"
+                    style={{
+                      width: "100%",
+                      maxWidth: "420px",
+                      height: "230px",
+                      objectFit: "cover",
+                      borderRadius: "14px",
+                      display: "block",
+                    }}
+                  />
+                  <div style={{ display: "flex", gap: "12px", marginTop: "12px" }}>
+                    <label
+                      htmlFor="property-image"
+                      style={{ ...imageButtonStyle, background: "#159a91", color: "#ffffff" }}
+                    >
+                      {text.changePicture}
+                    </label>
+                    <button type="button" onClick={removeImage} style={imageButtonStyle}>
+                      {text.removePicture}
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <label
+                  htmlFor="property-image"
+                  style={{ ...imageButtonStyle, marginTop: "10px", background: "#159a91", color: "#ffffff" }}
+                >
+                  {text.addPicture}
+                </label>
+              )}
               <input
-                name="imageUrl"
-                value={form.imageUrl}
-                onChange={changeForm}
-                placeholder="https://example.com/your-property.jpg"
-                type="url"
-                style={inputStyle}
+                id="property-image"
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                onChange={handleImageChange}
+                style={{ display: "none" }}
               />
-              <p>Paste a public image link to show your own property photo.</p>
+              <p>{text.pictureHelp}</p>
             </div>
 
             <div style={{ marginTop: "25px" }}>
@@ -416,6 +540,7 @@ function PostProperty() {
 
             <button
               type="submit"
+              disabled={isSubmitting}
               style={{
                 width: "100%",
                 marginTop: "22px",
@@ -426,10 +551,11 @@ function PostProperty() {
                 color: "#ffffff",
                 fontSize: "16px",
                 fontWeight: "800",
-                cursor: "pointer",
+                cursor: isSubmitting ? "wait" : "pointer",
+                opacity: isSubmitting ? 0.7 : 1,
               }}
             >
-              {text.submitPay} →
+              {isSubmitting ? text.uploading : `${text.submitPay} →`}
             </button>
           </form>
         )}
